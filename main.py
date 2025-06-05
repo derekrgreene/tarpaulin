@@ -11,6 +11,7 @@
 import requests, json, os
 from flask import Flask, request, jsonify, url_for
 from google.cloud import datastore
+from google.cloud import storage
 from six.moves.urllib.request import urlopen
 from jose import jwt
 from authlib.integrations.flask_client import OAuth
@@ -18,18 +19,22 @@ from dotenv import load_dotenv, find_dotenv
 
 app = Flask(__name__)
 load_dotenv(find_dotenv())
-app.secret_key = os.getenv('SECRET_KEY')
-client = datastore.Client(project='final-462001')
-oauth = OAuth(app)
 
 DOMAIN = os.getenv('DOMAIN')
 CLIENT_ID = os.getenv('CLIENT_ID')
 CLIENT_SECRET = os.getenv('CLIENT_SECRET')
+GCP_BUCKET = os.getenv('GCP_BUCKET')
 ALGORITHMS = ["RS256"]
 ERROR_400 = {"Error": "The request body is invalid"}
 ERROR_401 = {"Error": "Unauthorized"}
 ERROR_403 = {"Error": "You don't have permission on this resource"}
 ERROR_404 = {"Error": "Not found"}
+
+app.secret_key = os.getenv('SECRET_KEY')
+client = datastore.Client(project='final-462001')
+storage = storage.Client()
+bucket = storage.bucket(GCP_BUCKET)
+oauth = OAuth(app)
 
 auth0 = oauth.register(
     'auth0',
@@ -190,8 +195,6 @@ def get_user(user_id):
             return jsonify(ERROR_401), 401
 
     requester_sub = payload['sub']
-
-    # Retrieve the requester user
     query = client.query(kind='users')
     query.add_filter('sub', '=', requester_sub)
     requester_results = list(query.fetch())
@@ -201,30 +204,24 @@ def get_user(user_id):
 
     requester = requester_results[0]
     requester_role = requester.get('role')
-
-    # Retrieve the target user by ID
     user_key = client.key('users', user_id)
     user = client.get(user_key)
 
     if not user:
-        return jsonify(ERROR_403), 403
+        return jsonify(ERROR_404), 404
 
-    # Allow access if admin or user owns the ID
     if requester_role != 'admin' and requester_sub != user.get('sub'):
         return jsonify(ERROR_403), 403
 
-    # Build the response
     response = {
         "id": user.key.id,
         "role": user.get('role'),
         "sub": user.get('sub')
     }
 
-    # Include avatar_url if avatar exists
     if 'avatar' in user:
-        response["avatar_url"] = url_for('get_user_avatar', user_id=user.key.id, _external=True)
+        response["avatar_url"] = url_for('create_update_avatar', user_id=user.key.id, _external=True)
 
-    # Include courses if the user is instructor or student
     if user.get('role') in ['instructor', 'student']:
         course_links = []
         if 'courses' in user:
@@ -235,7 +232,53 @@ def get_user(user_id):
     return jsonify(response), 200
 
 
+@app.route('/users/<int:user_id>/avatar', methods=['GET', 'POST'])
+def create_update_avatar(user_id):
+    if request.method == 'POST':
+        # Upload avatar
+        if 'file' not in request.files:
+            return jsonify(ERROR_400), 400
 
+        file = request.files['file']
+
+        try:
+            payload = verify_jwt(request)
+        except AuthError as err:
+            if err.status_code == 401:
+                return jsonify(ERROR_401), 401
+            elif err.status_code == 403:
+                return jsonify(ERROR_403), 403
+            else:
+                return jsonify(ERROR_401), 401
+
+        user_key = client.key('users', user_id)
+        user = client.get(user_key)
+
+        if not user:
+            return jsonify(ERROR_404), 404
+
+        if payload['sub'] != user.get('sub'):
+            return jsonify(ERROR_403), 403
+
+        blob = bucket.blob(f"avatars/{user_id}.png")
+        blob.upload_from_file(file, content_type='image/png')
+        blob.make_public()
+        user['avatar'] = blob.public_url
+        client.put(user)
+        
+        avatar_url = url_for('create_update_avatar', user_id=user_id, _external=True)
+
+        return jsonify({"avatar_url": avatar_url}), 200
+
+    elif request.method == 'GET':
+        # Get avatar
+        user_key = client.key('users', user_id)
+        user = client.get(user_key)
+
+        if not user or 'avatar' not in user:
+            return jsonify(ERROR_404), 404
+
+        return jsonify({"avatar_url": user['avatar']}), 200
 
 
 
