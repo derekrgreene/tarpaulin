@@ -177,5 +177,77 @@ def get_all_users():
     return jsonify(response), 200
 
 
+@app.route('/users/<int:user_id>', methods=['GET'])
+def get_user(user_id):
+    try:
+        payload = verify_jwt(request)
+    except AuthError as err:
+        if err.status_code == 401:
+            return jsonify(ERROR_401), 401
+        elif err.status_code == 403:
+            return jsonify(ERROR_403), 403
+        else:
+            return jsonify(ERROR_401), 401
+
+    requester_sub = payload['sub']
+
+    # Retrieve the requester user
+    query = client.query(kind='users')
+    query.add_filter('sub', '=', requester_sub)
+    requester_results = list(query.fetch())
+
+    if not requester_results:
+        return jsonify(ERROR_403), 403
+
+    requester = requester_results[0]
+    requester_role = requester.get('role')
+
+    # Retrieve the target user by ID
+    user_key = client.key('users', user_id)
+    user = client.get(user_key)
+
+    if not user:
+        return jsonify(ERROR_403), 403
+
+    # Allow access if admin or user owns the ID
+    if requester_role != 'admin' and requester_sub != user.get('sub'):
+        return jsonify(ERROR_403), 403
+
+    # Build the response
+    response = {
+        "id": user.key.id,
+        "role": user.get('role'),
+        "sub": user.get('sub')
+    }
+
+    # Include avatar_url if avatar exists
+    if 'avatar' in user:
+        response["avatar_url"] = url_for('get_user_avatar', user_id=user.key.id, _external=True)
+
+    # Include courses if the user is instructor or student
+    if user.get('role') in ['instructor', 'student']:
+        course_links = []
+        if 'courses' in user:
+            for course_id in user['courses']:
+                course_links.append(url_for('get_course_by_id', course_id=course_id, _external=True))
+        response["courses"] = course_links
+
+    return jsonify(response), 200
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8080, debug=True)
