@@ -1,4 +1,4 @@
 .env
 env/
 app.yaml
-postman_environment.json
+*.json
