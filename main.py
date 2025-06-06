@@ -114,6 +114,9 @@ def decode_jwt():
     payload = verify_jwt(request)
     return payload
 
+@app.route('/')
+def index():
+    return "Please navigate to /login to use this API"\
 
 @app.route('/users/login', methods=['POST'])
 def login_user():
