@@ -8,8 +8,8 @@
 #              This application is deployed on Google Cloud Platform using Google App
 #              Engine and Datastore. Auth0 is used for authentication.
 
-import requests, json, os
-from flask import Flask, request, jsonify, url_for
+import requests, json, os, tempfile
+from flask import Flask, request, jsonify, url_for, send_file
 from google.cloud import datastore
 from google.cloud import storage
 from six.moves.urllib.request import urlopen
@@ -220,7 +220,7 @@ def get_user(user_id):
     }
 
     if 'avatar' in user:
-        response["avatar_url"] = url_for('create_update_avatar', user_id=user.key.id, _external=True)
+        response["avatar_url"] = url_for('user_avatar', user_id=user.key.id, _external=True)
 
     if user.get('role') in ['instructor', 'student']:
         course_links = []
@@ -232,54 +232,197 @@ def get_user(user_id):
     return jsonify(response), 200
 
 
-@app.route('/users/<int:user_id>/avatar', methods=['GET', 'POST'])
-def create_update_avatar(user_id):
+@app.route('/users/<int:user_id>/avatar', methods=['GET', 'POST', 'DELETE'])
+def user_avatar(user_id):
     if request.method == 'POST':
-        # Upload avatar
         if 'file' not in request.files:
             return jsonify(ERROR_400), 400
 
-        file = request.files['file']
-
         try:
             payload = verify_jwt(request)
-        except AuthError as err:
-            if err.status_code == 401:
-                return jsonify(ERROR_401), 401
-            elif err.status_code == 403:
-                return jsonify(ERROR_403), 403
-            else:
-                return jsonify(ERROR_401), 401
+        except AuthError:
+            return jsonify(ERROR_401), 401
 
         user_key = client.key('users', user_id)
         user = client.get(user_key)
+        if not user:
+            return jsonify(ERROR_403), 403
 
+        jwt_sub = payload.get('sub', '').strip()
+        user_sub = user.get('sub', '').strip()
+
+        q = client.query(kind='users')
+        q.add_filter('sub', '=', jwt_sub)
+        requester = list(q.fetch())
+        is_admin = requester and requester[0].get('role') == 'admin'
+
+        print(f"user_sub: {user_sub}, jwt_sub: {jwt_sub}, is_admin: {is_admin}")
+
+        if user_sub != jwt_sub:
+            return jsonify(ERROR_403), 403
+
+        file = request.files['file']
+        blob = bucket.blob(f"avatars/{user_id}.png")
+        blob.upload_from_file(file, content_type='image/png')
+
+        user['avatar'] = f"avatars/{user_id}.png"
+        client.put(user)
+
+        return jsonify({
+            "avatar_url": url_for('user_avatar', user_id=user_id, _external=True)
+        }), 200
+
+    elif request.method == 'GET':
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return jsonify(ERROR_401), 401
+
+        user_key = client.key('users', user_id)
+        user = client.get(user_key)
         if not user:
             return jsonify(ERROR_404), 404
 
-        if payload['sub'] != user.get('sub'):
+        jwt_sub = payload.get('sub', '').strip()
+        user_sub = user.get('sub', '').strip()
+
+        if user_sub != jwt_sub:
             return jsonify(ERROR_403), 403
 
         blob = bucket.blob(f"avatars/{user_id}.png")
-        blob.upload_from_file(file, content_type='image/png')
-        blob.make_public()
-        user['avatar'] = blob.public_url
-        client.put(user)
-        
-        avatar_url = url_for('create_update_avatar', user_id=user_id, _external=True)
-
-        return jsonify({"avatar_url": avatar_url}), 200
-
-    elif request.method == 'GET':
-        # Get avatar
-        user_key = client.key('users', user_id)
-        user = client.get(user_key)
-
-        if not user or 'avatar' not in user:
+        if not blob.exists():
             return jsonify(ERROR_404), 404
 
-        return jsonify({"avatar_url": user['avatar']}), 200
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            blob.download_to_filename(temp_file.name)
+            return send_file(temp_file.name, mimetype='image/png')
 
+    elif request.method == 'DELETE':
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return jsonify(ERROR_401), 401
+
+        user_key = client.key('users', user_id)
+        user = client.get(user_key)
+        if not user:
+            return jsonify(ERROR_403), 403
+
+        jwt_sub = payload.get('sub', '').strip()
+        user_sub = user.get('sub', '').strip()
+
+        if jwt_sub != user_sub:
+            return jsonify(ERROR_403), 403
+
+        blob = bucket.blob(f"avatars/{user_id}.png")
+        if not blob.exists():
+            return jsonify(ERROR_404), 404
+
+        blob.delete()
+
+        if 'avatar' in user:
+            del user['avatar']
+            client.put(user)
+
+        return '', 204
+
+
+@app.route('/courses', methods=['GET', 'POST'])
+def courses():
+    if request.method == 'POST':
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return jsonify(ERROR_401), 401
+
+        jwt_sub = payload.get('sub')
+        q = client.query(kind='users')
+        q.add_filter('sub', '=', jwt_sub)
+        requester = list(q.fetch())
+        if not requester or requester[0].get('role') != 'admin':
+            return jsonify(ERROR_403), 403
+
+        data = request.get_json()
+        required_fields = ['subject', 'number', 'title', 'term', 'instructor_id']
+        if not data or any(field not in data for field in required_fields):
+            return jsonify(ERROR_400), 400
+
+        instructor_key = client.key('users', data['instructor_id'])
+        instructor = client.get(instructor_key)
+        if not instructor or instructor.get('role') != 'instructor':
+            return jsonify(ERROR_400), 400
+
+        course_key = client.key('courses')
+        course = datastore.Entity(key=course_key)
+        course.update({
+            'subject': data['subject'],
+            'number': data['number'],
+            'title': data['title'],
+            'term': data['term'],
+            'instructor_id': str(data['instructor_id'])
+        })
+        client.put(course)
+
+        course_id = course.key.id
+        response_body = {
+            'id': course_id,
+            'subject': data['subject'],
+            'number': data['number'],
+            'title': data['title'],
+            'term': data['term'],
+            'instructor_id': str(data['instructor_id']),
+            'self': url_for('get_course_by_id', course_id=course_id, _external=True)
+        }
+        return jsonify(response_body), 201
+
+    elif request.method == 'GET':
+        try:
+            offset = int(request.args.get('offset', 0))
+            limit = int(request.args.get('limit', 3))
+        except ValueError:
+            return jsonify(ERROR_400), 400
+
+        query = client.query(kind='courses')
+        query.order = ['subject']
+        results = list(query.fetch())
+
+        paged_courses = results[offset:offset + limit]
+        course_list = []
+        for course in paged_courses:
+            course_list.append({
+                'id': str(course.key.id),
+                'subject': course['subject'],
+                'number': course['number'],
+                'title': course['title'],
+                'term': course['term'],
+                'instructor_id': str(course['instructor_id']),
+                'self': url_for('get_course_by_id', course_id=course.key.id, _external=True)
+            })
+
+        response_body = {'courses': course_list}
+
+        if offset + limit < len(results):
+            response_body['next'] = url_for('courses', offset=offset + limit, limit=limit, _external=True)
+
+        return jsonify(response_body), 200
+
+
+@app.route('/courses/<int:course_id>', methods=['GET'])
+def get_course_by_id(course_id):
+    course_key = client.key('courses', course_id)
+    course = client.get(course_key)
+    if not course:
+        return jsonify(ERROR_404), 404
+
+    return jsonify({
+        'id': course_id,
+        'subject': course['subject'],
+        'number': course['number'],
+        'title': course['title'],
+        'term': course['term'],
+        'instructor_id': str(course['instructor_id']),
+        'self': url_for('get_course_by_id', course_id=course_id, _external=True)
+    }), 200
 
 
 
