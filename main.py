@@ -29,6 +29,7 @@ ERROR_400 = {"Error": "The request body is invalid"}
 ERROR_401 = {"Error": "Unauthorized"}
 ERROR_403 = {"Error": "You don't have permission on this resource"}
 ERROR_404 = {"Error": "Not found"}
+ERROR_409 = {"Error": "Enrollment data is invalid"}
 
 app.secret_key = os.getenv('SECRET_KEY')
 client = datastore.Client(project='final-462001')
@@ -359,7 +360,7 @@ def courses():
             'number': data['number'],
             'title': data['title'],
             'term': data['term'],
-            'instructor_id': str(data['instructor_id'])
+            'instructor_id': data['instructor_id']
         })
         client.put(course)
 
@@ -370,7 +371,7 @@ def courses():
             'number': data['number'],
             'title': data['title'],
             'term': data['term'],
-            'instructor_id': str(data['instructor_id']),
+            'instructor_id': data['instructor_id'],
             'self': url_for('get_course_by_id', course_id=course_id, _external=True)
         }
         return jsonify(response_body), 201
@@ -390,12 +391,12 @@ def courses():
         course_list = []
         for course in paged_courses:
             course_list.append({
-                'id': str(course.key.id),
+                'id': course.key.id,
                 'subject': course['subject'],
                 'number': course['number'],
                 'title': course['title'],
                 'term': course['term'],
-                'instructor_id': str(course['instructor_id']),
+                'instructor_id': course['instructor_id'],
                 'self': url_for('get_course_by_id', course_id=course.key.id, _external=True)
             })
 
@@ -407,32 +408,214 @@ def courses():
         return jsonify(response_body), 200
 
 
-@app.route('/courses/<int:course_id>', methods=['GET'])
+@app.route('/courses/<int:course_id>', methods=['GET', 'PATCH', 'DELETE'])
 def get_course_by_id(course_id):
-    course_key = client.key('courses', course_id)
-    course = client.get(course_key)
-    if not course:
-        return jsonify(ERROR_404), 404
+    if request.method == 'GET':
+        course_key = client.key('courses', course_id)
+        course = client.get(course_key)
+        if not course:
+            return jsonify(ERROR_404), 404
 
-    return jsonify({
-        'id': course_id,
-        'subject': course['subject'],
-        'number': course['number'],
-        'title': course['title'],
-        'term': course['term'],
-        'instructor_id': str(course['instructor_id']),
-        'self': url_for('get_course_by_id', course_id=course_id, _external=True)
-    }), 200
+        return jsonify({
+            'id': course_id,
+            'subject': course['subject'],
+            'number': course['number'],
+            'title': course['title'],
+            'term': course['term'],
+            'instructor_id': course['instructor_id'],
+            'self': url_for('get_course_by_id', course_id=course_id, _external=True)
+        }), 200
+
+    elif request.method == 'PATCH':
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return jsonify(ERROR_401), 401
+
+        jwt_sub = payload.get('sub')
+        q = client.query(kind='users')
+        q.add_filter('sub', '=', jwt_sub)
+        requester = list(q.fetch())
+
+        if not requester or requester[0].get('role') != 'admin':
+            return jsonify(ERROR_403), 403
+
+        course_key = client.key('courses', course_id)
+        course = client.get(course_key)
+        if not course:
+            return jsonify(ERROR_403), 403
+
+        content = request.get_json()
+        if content is None:
+            return jsonify(ERROR_400), 400
+
+        if 'instructor_id' in content:
+            instructor_key = client.key('users', content['instructor_id'])
+            instructor = client.get(instructor_key)
+            if not instructor or instructor.get('role') != 'instructor':
+                return jsonify(ERROR_400), 400
+            course['instructor_id'] = content['instructor_id']
+
+        if 'subject' in content:
+            course['subject'] = content['subject']
+        if 'number' in content:
+            course['number'] = content['number']
+        if 'title' in content:
+            course['title'] = content['title']
+        if 'term' in content:
+            course['term'] = content['term']
+
+        client.put(course)
+        return jsonify({
+            'id': course_id,
+            'subject': course['subject'],
+            'number': course['number'],
+            'title': course['title'],
+            'term': course['term'],
+            'instructor_id': course['instructor_id'],
+            'self': url_for('course_students', course_id=course_id, _external=True)
+        }), 200
+
+    elif request.method == 'DELETE':
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return jsonify(ERROR_401), 401
+
+        jwt_sub = payload.get('sub')
+        q = client.query(kind='users')
+        q.add_filter('sub', '=', jwt_sub)
+        requester = list(q.fetch())
+
+        if not requester:
+            return jsonify(ERROR_403), 403
+        if requester[0].get('role') != 'admin':
+            return jsonify(ERROR_403), 403
+
+        course_key = client.key('courses', course_id)
+        course = client.get(course_key)
+
+        if not course:
+            return jsonify(ERROR_403), 403
+
+        enrollment_query = client.query(kind='enrollments')
+        enrollment_query.add_filter('course_id', '=', course_id)
+        enrollments = list(enrollment_query.fetch())
+        for enrollment in enrollments:
+            client.delete(enrollment.key)
+
+        client.delete(course_key)
+        return '', 204
 
 
+@app.route('/courses/<int:course_id>/students', methods=['GET', 'PATCH'])
+def course_students(course_id):
+    if request.method == 'GET':
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return jsonify(ERROR_401), 401
 
+        jwt_sub = payload.get('sub')
 
+        q = client.query(kind='users')
+        q.add_filter('sub', '=', jwt_sub)
+        requester_list = list(q.fetch())
+        if not requester_list:
+            return jsonify(ERROR_403), 403
+        requester = requester_list[0]
 
+        course_key = client.key('courses', course_id)
+        course = client.get(course_key)
+        if not course:
+            return jsonify(ERROR_403), 403
 
+        if requester.get('role') != 'admin' and jwt_sub != course.get('instructor_id'):
+            return jsonify(ERROR_403), 403
 
+        enrollment_query = client.query(kind='enrollments')
+        enrollment_query.add_filter('course_id', '=', course_id)
+        enrollments = list(enrollment_query.fetch())
 
+        student_ids = [enrollment['student_id'] for enrollment in enrollments]
 
+        return jsonify(student_ids), 200
 
+    elif request.method == 'PATCH':
+        try:
+            payload = verify_jwt(request)
+        except AuthError:
+            return jsonify(ERROR_401), 401
+
+        jwt_sub = payload.get('sub')
+
+        course_key = client.key('courses', course_id)
+        course = client.get(course_key)
+        if not course:
+            return jsonify(ERROR_403), 403
+
+        q = client.query(kind='users')
+        q.add_filter('sub', '=', jwt_sub)
+        requester = list(q.fetch())
+        if not requester:
+            return jsonify(ERROR_403), 403
+
+        requester = requester[0]
+        requester_role = requester.get('role')
+
+        if requester_role != 'admin' and jwt_sub != course.get('instructor_id'):
+            return jsonify(ERROR_403), 403
+
+        content = request.get_json()
+        if content is None:
+            return jsonify(ERROR_400), 400
+
+        add_ids = content.get('add', [])
+        remove_ids = content.get('remove', [])
+
+        if set(add_ids) & set(remove_ids):
+            return jsonify(ERROR_409), 409
+
+        if add_ids:
+            q = client.query(kind='users')
+            q.add_filter('role', '=', 'student')
+            students = list(q.fetch())
+            student_ids = {student.key.id for student in students}
+
+            if not set(add_ids).issubset(student_ids):
+                return jsonify(ERROR_409), 409
+
+        if remove_ids:
+            q = client.query(kind='users')
+            q.add_filter('role', '=', 'student')
+            students = list(q.fetch())
+            student_ids = {student.key.id for student in students}
+
+            if not set(remove_ids).issubset(student_ids):
+                return jsonify(ERROR_409), 409
+
+        enrollment_query = client.query(kind='enrollments')
+        enrollment_query.add_filter('course_id', '=', course_id)
+        enrollments = list(enrollment_query.fetch())
+        enrolled_student_ids = {enrollment['student_id'] for enrollment in enrollments}
+
+        for student_id in add_ids:
+            if student_id not in enrolled_student_ids:
+                enrollment_key = client.key('enrollments')
+                enrollment = datastore.Entity(key=enrollment_key)
+                enrollment.update({
+                    'course_id': course_id,
+                    'student_id': student_id
+                })
+                client.put(enrollment)
+
+        for student_id in remove_ids:
+            if student_id in enrolled_student_ids:
+                for enrollment in enrollments:
+                    if enrollment['student_id'] == student_id:
+                        client.delete(enrollment.key)
+                        break
+        return '', 200
 
 
 if __name__ == '__main__':
