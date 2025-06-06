@@ -1,0 +1,14 @@
+runtime: python39
+automatic_scaling:
+  max_instances: 1
+env_variables:
+  SECRET_KEY: <ENTER YOUR SECRET>
+  CLIENT_ID: <ENTER YOUR OAUTH CLIENT ID>
+  CLIENT_SECRET: "ENTER YOUR OAUTH CLIENT SECRET"
+  DOMAIN: "ENTER YOUR GAE DOMAIN"
+  GCP_BUCKET: "ENTER YOUR GCP BUCKET NAME"
+handlers:
+- url: /static
+  static_dir: static
+- url: /.*
+  script: auto
