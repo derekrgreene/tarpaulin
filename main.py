@@ -9,7 +9,7 @@
 #              Engine and Datastore. Auth0 is used for authentication.
 
 import requests, json, os, tempfile
-from flask import Flask, request, jsonify, url_for, send_file
+from flask import Flask, request, jsonify, url_for, send_file, Response
 from google.cloud import datastore
 from google.cloud import storage
 from six.moves.urllib.request import urlopen
@@ -129,7 +129,14 @@ def verify_jwt(request):
 @app.route('/')
 def index():
     """Main route returned from url"""
-    return "Please navigate to /users/login to use this API"
+    html = '''
+    <p>Please navigate to /users/login to use this API</p>
+    <div>
+        Made with 💚 by <a href="https://derekrgreene.com">Derek R. Greene</a>
+    </div>
+    '''
+    return Response(html, mimetype='text/html')
+    return 
 
 
 @app.route('/decode', methods=['GET'])
