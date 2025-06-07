@@ -36,7 +36,7 @@ app.secret_key = os.getenv('SECRET_KEY')
 # Google Cloud Clients
 client = datastore.Client(project='final-462001')
 storage = storage.Client()
-bucket = storage.bucket(GCP_BUCKET)cc
+bucket = storage.bucket(GCP_BUCKET)
 oauth = OAuth(app)
 
 # OAuth Setup
