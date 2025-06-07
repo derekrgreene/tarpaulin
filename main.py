@@ -136,7 +136,6 @@ def index():
     </div>
     '''
     return Response(html, mimetype='text/html')
-    return 
 
 
 @app.route('/decode', methods=['GET'])
