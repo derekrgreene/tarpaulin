@@ -29,7 +29,7 @@ Tarpaulin is a lightweight course management tool. The Tarpaulin REST API has 13
         - 400 Bad Request (POST): Failure
         - 401 Unauthorized (POST): Failure
 
-- `GET '/users`
+- `GET /users`
     - Fetches all users and returns id, role, and sub properties for each
     
     - Parameters:
