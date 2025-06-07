@@ -7,3 +7,4 @@ requests
 authlib
 pymysql
 python-dotenv
+markdown

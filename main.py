@@ -8,7 +8,7 @@
 #              This application is deployed on Google Cloud Platform using Google App
 #              Engine and Datastore. Auth0 is used for authentication.
 
-import requests, json, os, tempfile
+import requests, json, os, tempfile, markdown
 from flask import Flask, request, jsonify, url_for, send_file, Response
 from google.cloud import datastore
 from google.cloud import storage
@@ -129,13 +129,13 @@ def verify_jwt(request):
 @app.route('/')
 def index():
     """Main route returned from url"""
-    html = '''
-    <p>Please navigate to /users/login to use this API</p>
-    <div>
-        Made with 💚 by <a href="https://derekrgreene.com">Derek R. Greene</a>
-    </div>
-    '''
-    return Response(html, mimetype='text/html')
+    readme_path = os.path.join(os.path.dirname(__file__), 'README.md')
+    
+    with open(readme_path, 'r', encoding='utf-8') as f:
+        md_content = f.read()
+
+    html_content = markdown.markdown(md_content)
+    return Response(html_content, mimetype='text/html')
 
 
 @app.route('/decode', methods=['GET'])

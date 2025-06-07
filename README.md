@@ -219,3 +219,5 @@ The application consists of four main components:
 ## 📧 Contact
 
 For support or questions, please open an issue on GitHub.
+
+Made with 💚 by [Derek R. Greene](https://derekrgreene.com)
