@@ -130,7 +130,7 @@ def verify_jwt(request):
 def index():
     """Main route returned from url"""
     readme_path = os.path.join(os.path.dirname(__file__), 'README.md')
-    
+
     with open(readme_path, 'r', encoding='utf-8') as f:
         md_content = f.read()
 
