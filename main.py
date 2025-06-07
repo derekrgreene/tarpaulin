@@ -36,7 +36,7 @@ app.secret_key = os.getenv('SECRET_KEY')
 # Google Cloud Clients
 client = datastore.Client(project='final-462001')
 storage = storage.Client()
-bucket = storage.bucket(GCP_BUCKET)
+bucket = storage.bucket(GCP_BUCKET)cc
 oauth = OAuth(app)
 
 # OAuth Setup
@@ -129,7 +129,7 @@ def verify_jwt(request):
 @app.route('/')
 def index():
     """Main route returned from url"""
-    return "Please navigate to /login to use this API"
+    return "Please navigate to /users/login to use this API"
 
 
 @app.route('/decode', methods=['GET'])
